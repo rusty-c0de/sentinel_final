@@ -1,0 +1,49 @@
+import {countryLocation,normalizeIp,validCoordinates} from './geo';
+import {extractAttackIndicators,type AttackIndicators} from './attack-metadata';
+import type {LocationPrecision,Observation} from './types';
+export interface ParsedObservation extends Omit<Observation,'id'|'incidentId'|'siteId'|'createdAt'>{targetHint:string;attack?:AttackIndicators;}
+export interface IngestResult {events:ParsedObservation[];recordsRead:number;unparsedRecords:number;warnings:string[];targets:string[];}
+const targetFields=['targetinstallation','targetinstallationname','targetinstallationid','targetsite','targetsitename','targetsiteid','destinationinstallation','destinationinstallationname','destinationsite','destinationsitename','installation','installationname','installationid','sitename','site'];
+const key=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
+function flatten(input:unknown,prefix='',out:Record<string,string>={}){if(!input||typeof input!=='object'||Array.isArray(input))return out;for(const[k,v]of Object.entries(input)){if(v===null||v===undefined)continue;if(Array.isArray(v)){if(/^(?:cves?|cveids?|vulnerability(?:id|cves?|cveids?)|signatures?|signatureids?|detectionsignatures?|detectionsignatureids?|affectedproducts?|products?|productnames?)$/.test(key(prefix+k)))out[key(prefix+k)]=JSON.stringify(v.filter(item=>typeof item==='string'||typeof item==='number'));continue;}if(typeof v==='object')flatten(v,prefix+k,out);else{out[key(prefix+k)]=String(v);if(!prefix&&!Object.hasOwn(out,key(k)))out[key(k)]=String(v);}}return out;}
+function csvRows(raw:string,delimiter:string){const rows:string[][]=[];let row:string[]=[],value='',quoted=false;for(let i=0;i<raw.length;i++){const c=raw[i];if(c==='"'){if(quoted&&raw[i+1]==='"'){value+='"';i++;}else quoted=!quoted;}else if(c===delimiter&&!quoted){row.push(value);value='';}else if(c==='\n'&&!quoted){row.push(value.replace(/\r$/,''));if(row.some(v=>v.trim()))rows.push(row);row=[];value='';}else value+=c;}row.push(value.replace(/\r$/,''));if(row.some(v=>v.trim()))rows.push(row);return rows;}
+function timestamp(value:string|undefined,raw:string){let s=value??raw.match(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\b/)?.[0];if(!s)return null;if(/^\d{10}$/.test(s)||/^\d{13}$/.test(s)){const n=Number(s)* (s.length===10?1000:1);return Number.isFinite(n)?new Date(n).toISOString():null;}if(!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s))return null;const n=Date.parse(s);return Number.isFinite(n)?new Date(n).toISOString():null;}
+function normalize(input:unknown,raw:string,lineNumber:number,defaults:Record<string,string>):ParsedObservation|null{
+ const local=flatten(input),flat={...defaults,...local};const get=(...names:string[])=>names.map(n=>flat[key(n)]).find(v=>v!==undefined&&v.trim()!=='')?.trim();
+ const ssh=raw.match(/(?:Failed password|Accepted (?:password|publickey)).*?for (?:invalid user )?(\S+) from ([a-fA-F\d.:]+)\b/);
+ const sourceIp=normalizeIp(get('source_ip','src_ip','srcip','sourceipaddress','sourceaddress','src','source.ip','source.address','client.ip','clientip','remoteip','remoteaddr','ipaddress','source')??ssh?.[2]);if(!sourceIp)return null;
+ const targetIp=normalizeIp(get('target_ip','destination_ip','dest_ip','dst_ip','dstip','dst','destination.address','destination.ip','target.ip','destip','destinationipaddress'));
+ const portValue=get('destination_port','dest_port','dst_port','dport','dpt','destination.port','target_port','target.port');const p=portValue?Number(portValue):NaN,targetPort=Number.isInteger(p)&&p>0&&p<=65535?p:null;
+ let eventType=(get('event_type','event.type','event.action','event.category','signature','eventid','event.code','type')??'network_event').slice(0,100);let outcome=(get('outcome','event.outcome','result','action','act','status')??'unknown').toLowerCase();
+ const message=(local.message??local.msg??local.summary??local.description??raw).toLowerCase();const signals=(eventType+' '+outcome+' '+message).toLowerCase();
+ if(/(?:authentication|login|logon|sign.in|password|4625|4624)/.test(signals)){const eventId=eventType;eventType='authentication';if(/(?:fail|denied|invalid|unsuccess)/.test(outcome)||/4625/.test(eventId))outcome='failure';else if(/(?:success|accepted)/.test(outcome)||/4624/.test(eventId))outcome='success';else if(/(?:fail|denied|invalid|4625|unsuccess)/.test(message))outcome='failure';else if(/(?:success|accepted|4624)/.test(message))outcome='success';}
+ else if(/(?:deny|denied|drop|block|reject)/.test(outcome))outcome='blocked';else if(/(?:allow|accept|pass|success)/.test(outcome))outcome='allowed';
+ if(!['failure','success','blocked','allowed','unknown'].includes(outcome))outcome='unknown';
+ const sourceLat=get('source_lat','src_lat','source_latitude','src_latitude','source.geo.location.lat','source.geo.latitude','source.geo.lat','source.location.latitude');const sourceLng=get('source_lng','source_lon','src_lng','src_lon','source_longitude','src_longitude','source.geo.location.lon','source.geo.longitude','source.geo.lon','source.location.longitude');
+ const country=get('source_country','src_country','srccountry','source.geo.country_name','source.geo.country_iso_code','sourcecountrycode','source.geo.country','source.location.country');const coarse=country?countryLocation(country):undefined;
+ const exact=validCoordinates(sourceLat,sourceLng);const sourceLabel=(get('source_location','source_label','source_city','source.geo.city_name')??country??'').slice(0,120);const precision:LocationPrecision=exact?'logged':coarse?'country':'unknown';
+ return {sourceIp,targetIp,targetPort,protocol:(get('protocol','proto','network.transport')??'').toUpperCase().slice(0,20),username:(get('username','user.name','user','accountname','targetusername')??ssh?.[1]??'').slice(0,120),eventType,outcome,occurredAt:timestamp(get('timestamp','@timestamp','time','datetime','eventtime','timecreated','event.created'),raw),sourceLabel:sourceLabel||coarse?.name||'',sourceLat:exact?Number(sourceLat):coarse?.lat??null,sourceLng:exact?Number(sourceLng):coarse?.lng??null,precision,lineNumber,targetHint:(get(...targetFields)??'').slice(0,120),attack:extractAttackIndicators(local,defaults)};
+}
+export function ingestLog(raw:string):IngestResult{
+ const events:ParsedObservation[]=[];const targets=new Set<string>();let recordsRead=0,unparsedRecords=0;const warnings:string[]=[];const defaults:Record<string,string>={};
+ const collectTargets=(input:unknown)=>{const shapes=(value:unknown,prefix='')=>{if(!value||typeof value!=='object'||Array.isArray(value))return;for(const [name,item]of Object.entries(value)){const full=key(prefix+name);if(targetFields.includes(full)&&item!==null&&item!==undefined){if(Array.isArray(item)||typeof item!=='string'&&typeof item!=='object')throw Error('Each installation target must be a single approved base name or ID.');if(typeof item==='object'&&!Object.hasOwn(item,'name')&&!Object.hasOwn(item,'id'))throw Error('Installation target objects must provide an approved name or ID.');}if(item&&typeof item==='object'&&!Array.isArray(item))shapes(item,prefix+name);}};shapes(input);const flat=flatten(input);for(const name of targetFields){const value=flat[name]?.trim();if(value){if(value.length>120)throw Error('Installation target names must be 120 characters or less.');targets.add(value);}}};
+ const add=(v:unknown,text:string,line:number)=>{collectTargets(v);recordsRead++;const event=normalize(v,text,line,defaults);if(event){events.push(event);if(events.length>1500)throw new Error('This log contains more than 1,500 source events. Split it into smaller uploads.');}else unparsedRecords++;};
+ let parsed:unknown;try{parsed=JSON.parse(raw);}catch{}
+ if(parsed&&typeof parsed==='object'){
+  if(Array.isArray(parsed))parsed.forEach((v,i)=>add(v,JSON.stringify(v),i+1));
+  else{const obj=parsed as Record<string,unknown>,records=obj.events??obj.records??obj.logs;collectTargets(obj);Object.assign(defaults,flatten(obj));if(Array.isArray(records))records.forEach((v,i)=>add(v,JSON.stringify(v),i+1));else add(obj,raw,1);}
+ }else{
+  const lines=raw.split(/\r?\n/);for(const line of lines){const m=line.match(/^\s*([A-Za-z_ .]{2,36})\s*:\s*(.*?)\s*$/);if(m){defaults[key(m[1])]=m[2];collectTargets({[m[1]]:m[2]});}}
+  collectTargets(defaults);
+  const first=lines.find(l=>l.trim())??'';const delimiter=first.includes('\t')?'\t':first.includes(';')?';':',';const headers=csvRows(first,delimiter)[0]??[];
+  if(headers.some(h=>['sourceip','srcip','src','sourceaddress','sourceipaddress','clientip'].includes(key(h))||targetFields.includes(key(h)))){const rows=csvRows(raw,delimiter);for(let i=1;i<rows.length;i++)add(Object.fromEntries(rows[0].map((h,j)=>[h,rows[i][j]??''])),rows[i].join(delimiter),i+1);}
+  else{for(let i=0;i<lines.length;i++){const line=lines[i];if(!line.trim())continue;let obj:unknown;try{obj=JSON.parse(line);}catch{const fields:Record<string,string>={};for(const m of line.matchAll(/([@A-Za-z_][\w.@-]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^\s,]+)/g))fields[m[1]]=m[2].replace(/^["']|["']$/g,'');obj=fields;}collectTargets(obj);const found=normalize(obj,line,i+1,{});if(found)add(obj,line,i+1);}
+   if(!events.length&&Object.keys(defaults).length)add(defaults,raw,1);
+  }
+ }
+ if(!events.length)warnings.push('No source-IP events recognized. The original log can still be attached; add a source observation manually if needed.');
+ if(events.some(e=>e.sourceLat===null))warnings.push('Some source locations are unknown. Add analyst locations after saving to map these routes.');
+ if(events.some(e=>!e.occurredAt))warnings.push('Some events have no unambiguous timezone-aware timestamp. Timed rules use only timestamped events.');
+ if(events.some(e=>e.precision==='country'))warnings.push('Country markers are approximate centers from country labels in the log, not precise IP locations.');
+ return {events,recordsRead,unparsedRecords,warnings,targets:[...targets]};
+}

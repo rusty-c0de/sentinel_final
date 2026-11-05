@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1793812404401,
+      "tag": "0000_lyrical_korg",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793814287162,
+      "tag": "0001_giant_elektra",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793821103686,
+      "tag": "0002_watery_vertigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793891110340,
+      "tag": "0003_slow_ma_gnuci",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793903750880,
+      "tag": "0004_aspiring_doctor_doom",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Preserve the existing dependency review policy and approved install scripts.
+minimumReleaseAge: 10080
+minimumReleaseAgeIgnoreMissingTime: false
+trustLockfile: false
+strictDepBuilds: true
+allowBuilds:
+  esbuild: true
+  fsevents: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true
+overrides:
+  miniflare>sharp: 0.35.4

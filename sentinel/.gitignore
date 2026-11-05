@@ -1,0 +1,45 @@
+# Installed dependencies
+node_modules/
+.pnp.*
+.pnpm-store/
+
+# Build output and generated framework types
+dist/
+build/
+out/
+.next/
+.vinext/
+next-env.d.ts
+*.tsbuildinfo
+
+# Cloudflare local data, logs, credentials, and tool caches
+.wrangler/
+.sites-runtime/
+.cache/
+.turbo/
+.eslintcache
+*.log
+coverage/
+test-results/
+playwright-report/
+
+# Local secrets; the empty template is intentionally versioned
+.env*
+.dev.vars*
+!.env.example
+!.dev.vars.example
+*.pem
+*.key
+
+# Workspace/editor/OS artifacts and previous exports
+.idea/
+.vscode/
+.agents/
+.codex/
+work/
+outputs/
+*.zip
+*.tar.gz
+.DS_Store
+Thumbs.db
+*~
